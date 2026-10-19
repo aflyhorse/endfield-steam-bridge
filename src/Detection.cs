@@ -7,6 +7,10 @@ namespace EndfieldSteamBridge
 {
     internal static class Detection
     {
+        private static readonly string[] GameCandidates = new[] {
+            Path.Combine("games", "Arknights Endfield", "Endfield.exe"),
+            Path.Combine("games", "Endfield Game", "Endfield.exe")
+        };
         public static string FindSteam()
         {
             using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam"))
@@ -99,6 +103,32 @@ namespace EndfieldSteamBridge
             if (gameChannel != channel.Id) return gameChannel == null ? "无法识别客户端渠道，请用对应启动器检查游戏文件" : "客户端属于" + GameChannel.Get(gameChannel).Name + "，与所选服务器不一致";
             ready = true; return channel.Name + "启动器与客户端匹配 · 文件结构可用";
         }
+        internal static string DetectGameFromLauncher(string launcher)
+        {
+            if (!ValidLauncher(launcher)) return null;
+            try
+            {
+                string launcherRoot = Path.GetDirectoryName(Path.GetFullPath(launcher));
+                if (String.IsNullOrEmpty(launcherRoot)) return null;
+                foreach (string relative in GameCandidates)
+                {
+                    string candidate = Path.Combine(launcherRoot, relative);
+                    if (ValidGame(candidate)) return candidate;
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            catch (ArgumentException) { }
+            catch (NotSupportedException) { }
+            catch (System.Security.SecurityException) { }
+            catch (PathTooLongException) { }
+            return null;
+        }
+        internal static string ResolveGame(string providedGame, string configGame, bool sameChannel, string launcher)
+        {
+            string game = providedGame ?? (sameChannel && ValidGame(configGame) ? configGame : null);
+            return game ?? DetectGameFromLauncher(launcher);
+        }
         public static DetectionResult Scan(string launcher, string game, string channelId = null)
         {
             var result = new DetectionResult();
@@ -110,12 +140,7 @@ namespace EndfieldSteamBridge
                 var channel = GameChannel.Get(channelId ?? (config == null ? null : config.ChannelId)); result.ChannelId = channel.Id;
                 bool sameChannel = config != null && GameChannel.Get(config.ChannelId).Id == channel.Id;
                 result.Launcher = launcher ?? (sameChannel && ValidLauncher(config.Launcher) ? config.Launcher : FindLauncher(channel.Id));
-                result.Game = game ?? (sameChannel && ValidGame(config.Game) ? config.Game : null);
-                if (result.Game == null && result.Launcher != null)
-                {
-                    string candidate = Path.Combine(Path.GetDirectoryName(result.Launcher), "games", "Arknights Endfield", "Endfield.exe");
-                    if (ValidGame(candidate)) result.Game = candidate;
-                }
+                result.Game = ResolveGame(game, config == null ? null : config.Game, sameChannel, result.Launcher);
                 result.GameStatus = ClientStatus(result.Launcher, result.Game, channel.Id, out result.ClientReady);
             }
             catch (Exception e) { result.Error = e.Message; }
