@@ -34,6 +34,7 @@ namespace EndfieldSteamBridge
             try
             {
                 ChannelTests(root);
+                DetectionAutoFillTests(root);
                 Check(BridgeRuntime.AcceptSteamLaunch("4732690", null, false), "accept normal Steam app identity");
                 Check(BridgeRuntime.AcceptSteamLaunch(null, "4732690", false), "accept SteamGameId when SteamAppId is missing");
                 Check(BridgeRuntime.AcceptSteamLaunch("0", "4732690", false), "accept SteamGameId when SteamAppId is zero");
@@ -137,6 +138,41 @@ namespace EndfieldSteamBridge
             bool matched;
             Detection.ClientStatus(launchers["official"], games["bilibili"], "official", out matched); Check(!matched, "reject official launcher paired with bilibili game");
             Detection.ClientStatus(launchers["bilibili"], games["official"], "bilibili", out matched); Check(!matched, "reject bilibili launcher paired with official game");
+        }
+        private static void DetectionAutoFillTests(string root)
+        {
+            string launcherRoot = Path.Combine(root, "official launcher 空 格");
+            Directory.CreateDirectory(launcherRoot);
+            string launcher = Path.Combine(launcherRoot, "Launcher.exe");
+            File.WriteAllText(launcher, "MZ public-build-marker/cn");
+            string newLayoutGameRoot = Path.Combine(launcherRoot, "games", "Endfield Game");
+            string newLayoutGame = BuildValidGame(newLayoutGameRoot, "official");
+            Check(Detection.DetectGameFromLauncher(launcher) == newLayoutGame, "auto-fill game path from launcher when Endfield Game client exists");
+
+            string noClientRoot = Path.Combine(root, "official launcher no client");
+            Directory.CreateDirectory(noClientRoot);
+            string noClientLauncher = Path.Combine(noClientRoot, "Launcher.exe");
+            File.WriteAllText(noClientLauncher, "MZ public-build-marker/cn");
+            Check(Detection.DetectGameFromLauncher(noClientLauncher) == null, "do not auto-fill when launcher-derived client is missing");
+
+            string existingRoot = Path.Combine(root, "existing-user-game");
+            Directory.CreateDirectory(existingRoot);
+            string existingLauncher = Path.Combine(existingRoot, "Launcher.exe");
+            File.WriteAllText(existingLauncher, "MZ public-build-marker/cn");
+            string existingGame = BuildValidGame(Path.Combine(existingRoot, "manual game"), "official");
+            Check(Detection.ResolveGame(existingGame, null, true, existingLauncher) == existingGame, "keep existing valid user game path when auto-detected candidate is invalid");
+        }
+        private static string BuildValidGame(string gameRoot, string channelId)
+        {
+            var channel = GameChannel.Get(channelId);
+            Directory.CreateDirectory(gameRoot);
+            byte[] pe = new byte[256]; pe[0] = 0x4d; pe[1] = 0x5a; pe[0x3c] = 0x80; pe[0x80] = 0x50; pe[0x81] = 0x45; pe[0x84] = 0x64; pe[0x85] = 0x86;
+            string game = Path.Combine(gameRoot, "Endfield.exe"); File.WriteAllBytes(game, pe);
+            File.WriteAllText(Path.Combine(gameRoot, "UnityPlayer.dll"), "fixture");
+            Directory.CreateDirectory(Path.Combine(gameRoot, "Endfield_Data")); File.WriteAllText(Path.Combine(gameRoot, "Endfield_Data", "app.info"), "Hypergryph\nEndfield\n");
+            Directory.CreateDirectory(Path.Combine(gameRoot, "U8Data", "config")); File.WriteAllText(Path.Combine(gameRoot, "U8Data", "config", "config.gryph"), "fixture");
+            File.WriteAllText(Path.Combine(gameRoot, "u8_channel.dll"), "MZ/" + channel.SdkMarker);
+            return game;
         }
     }
 }
