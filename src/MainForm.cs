@@ -16,6 +16,7 @@ namespace EndfieldSteamBridge
         private ComboBox server;
         private TextBox launcher, game;
         private Button enable, restore, refresh, chooseLauncher, chooseGame;
+        private CheckBox thirdParty;
         private DetectionResult current;
         private bool busy, previewRendering;
         public MainForm()
@@ -38,8 +39,8 @@ namespace EndfieldSteamBridge
             layout.Controls.Add(MakeLabel("ENDFIELD  /  STEAM BRIDGE                                  v" + App.Version, 10, muted), 0, 0);
             headline = MakeLabel("官服终末地接入Steam启动", 26, ink); layout.Controls.Add(headline, 0, 1);
             layout.Controls.Add(MakeLabel("使用已有国服客户端 · 自动启动 · Steam 计时与原生叠加层", 10, muted), 0, 2);
-            var card = new BufferedLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(184, Color.White), Padding = new Padding(20, 14, 20, 10), ColumnCount = 1, RowCount = 10, Margin = new Padding(0) };
-            foreach (int h in new[] { 25, 40, 25, 40, 33, 42, 42, 25, 36 }) card.RowStyles.Add(new RowStyle(SizeType.Absolute, h));
+            var card = new BufferedLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(184, Color.White), Padding = new Padding(20, 14, 20, 10), ColumnCount = 1, RowCount = 11, Margin = new Padding(0) };
+            foreach (int h in new[] { 25, 40, 25, 40, 33, 28, 42, 42, 25, 36 }) card.RowStyles.Add(new RowStyle(SizeType.Absolute, h));
             card.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.Controls.Add(card, 0, 3);
             card.Controls.Add(MakeLabel("01   STEAM 账号与游戏库", 10, muted), 0, 0);
@@ -57,11 +58,15 @@ namespace EndfieldSteamBridge
             }
             serverRow.Controls.Add(server, 1, 0); card.Controls.Add(serverRow, 0, 3);
             client = MakeLabel("正在查找鹰角启动器与国服…", 10, ink); card.Controls.Add(client, 0, 4);
-            card.Controls.Add(PathRow("启动器", out launcher, out chooseLauncher), 0, 5);
-            card.Controls.Add(PathRow("客户端", out game, out chooseGame), 0, 6);
-            card.Controls.Add(MakeLabel("03   载入状态", 10, muted), 0, 7);
-            installed = MakeLabel("尚未载入", 10, ink); card.Controls.Add(installed, 0, 8);
+            thirdParty = new CheckBox { Text = "使用第三方启动器（跳过鹰角启动器，直接调用选择的 exe 或 bat）", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 9), ForeColor = ink, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 0), AutoSize = true };
+            try { if (File.Exists(App.SettingsPath)) { var s = App.Load<AppSettings>(App.SettingsPath); thirdParty.Checked = s != null && s.UseThirdPartyLauncher; } } catch (Exception) { }
+            card.Controls.Add(thirdParty, 0, 5);
+            card.Controls.Add(PathRow("启动器", out launcher, out chooseLauncher), 0, 6);
+            card.Controls.Add(PathRow("客户端", out game, out chooseGame), 0, 7);
+            card.Controls.Add(MakeLabel("03   载入状态", 10, muted), 0, 8);
+            installed = MakeLabel("尚未载入", 10, ink); card.Controls.Add(installed, 0, 9);
             chooseLauncher.Click += delegate { Choose(true); }; chooseGame.Click += delegate { Choose(false); };
+            thirdParty.CheckedChanged += async delegate { ApplyThirdPartyUI(); App.Save(App.SettingsPath, new AppSettings { UseThirdPartyLauncher = thirdParty.Checked }); if (busy) return; launcher.Clear(); game.Clear(); await RefreshDetection(); };
             server.SelectedIndexChanged += async delegate
             {
                 if (busy) return;
@@ -130,13 +135,31 @@ namespace EndfieldSteamBridge
         }
         private async void Choose(bool isLauncher)
         {
-            using (var dialog = new OpenFileDialog { Filter = isLauncher ? "鹰角启动器 (Launcher.exe)|Launcher.exe" : "国服终末地 (Endfield.exe)|Endfield.exe", Title = isLauncher ? "选择国服鹰角启动器根目录中的 Launcher.exe" : "选择国服游戏目录中的 Endfield.exe", CheckFileExists = true })
-                if (dialog.ShowDialog(this) == DialogResult.OK) { if (isLauncher) launcher.Text = dialog.FileName; else game.Text = dialog.FileName; await RefreshDetection(); }
+            if (isLauncher && thirdParty.Checked) { MessageBox.Show(this, "已启用第三方启动器，启动器路径由所选 exe / bat 直接调用。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            bool tpexMode = thirdParty.Checked && !isLauncher;
+            var dlg = new OpenFileDialog
+            {
+                Filter = isLauncher ? "鹰角启动器 (Launcher.exe)|Launcher.exe" : tpexMode ? "第三方启动器 (*.exe;*.bat)|*.exe;*.bat" : "国服终末地 (Endfield.exe)|Endfield.exe",
+                Title = isLauncher ? "选择国服鹰角启动器根目录中的 Launcher.exe" : tpexMode ? "选择第三方启动器可执行文件或批处理" : "选择国服游戏目录中的 Endfield.exe",
+                CheckFileExists = true
+            };
+            using (dlg) if (dlg.ShowDialog(this) == DialogResult.OK) { if (isLauncher) launcher.Text = dlg.FileName; else game.Text = dlg.FileName; await RefreshDetection(); }
+        }
+        private void ApplyThirdPartyUI()
+        {
+            bool tp = thirdParty.Checked;
+            foreach (Control c in launcher.Parent.Controls)
+            {
+                c.Enabled = !tp;
+                c.ForeColor = tp ? muted : ink;
+            }
+            launcher.BackColor = tp ? Color.FromArgb(240, 243, 245) : Color.FromArgb(247, 249, 250);
         }
         private void SetBusy(bool value)
         {
             busy = value;
-            refresh.Enabled = chooseLauncher.Enabled = chooseGame.Enabled = server.Enabled = !value;
+            refresh.Enabled = chooseLauncher.Enabled = chooseGame.Enabled = server.Enabled = thirdParty.Enabled = !value;
+            if (thirdParty.Checked) chooseLauncher.Enabled = false;
             bool stateExists = File.Exists(App.StatePath);
             enable.Enabled = !value && !stateExists && current != null && current.Account != null && current.Account.Known && current.Account.Owned && current.ClientReady;
             restore.Enabled = !value && stateExists;
@@ -146,21 +169,26 @@ namespace EndfieldSteamBridge
             SetBusy(true); status.Text = "正在读取当前 Steam 账号与国服安装位置…";
             string l = String.IsNullOrWhiteSpace(launcher.Text) ? null : launcher.Text, g = String.IsNullOrWhiteSpace(game.Text) ? null : game.Text;
             string channelId = ((GameChannel)server.SelectedItem).Id;
-            try { current = await Task.Run(() => Detection.Scan(l, g, channelId)); Populate(); }
+            bool tp = thirdParty.Checked;
+            string tpex = tp ? g : null;
+            try { current = await Task.Run(() => Detection.Scan(l, g, channelId, tp, tpex)); Populate(); }
             finally { SetBusy(false); }
         }
         private void Populate()
         {
+            ApplyThirdPartyUI();
             var a = current.Account;
             var channel = (GameChannel)server.SelectedItem;
-            headline.Text = channel == GameChannel.Official ? "官服终末地接入Steam启动" : "B服终末地接入Steam启动";
+            bool tp = thirdParty.Checked || (current != null && current.UseThirdPartyLauncher);
+            headline.Text = channel == GameChannel.Official ? (tp ? "官服终末地 · 第三方启动器模式" : "官服终末地接入Steam启动") : (tp ? "B服终末地 · 第三方启动器模式" : "B服终末地接入Steam启动");
             account.Text = a == null || !a.Known ? (a == null ? "Steam 未就绪" : a.Error) : (a.Owned ? "已拥有终末地  ·  " : "尚未拥有终末地  ·  ") + (a.Name ?? a.SteamId.ToString());
             account.ForeColor = a != null && a.Known && a.Owned ? blue : Color.FromArgb(162, 85, 30);
-            launcher.Text = current.Launcher ?? launcher.Text; game.Text = current.Game ?? game.Text;
+            launcher.Text = current.Launcher ?? launcher.Text;
+            if (tp) game.Text = current.ThirdPartyExe ?? game.Text; else game.Text = current.Game ?? game.Text;
             client.Text = current.GameStatus ?? "等待 Steam 检测完成";
             var state = current.Installation;
             installed.Text = state == null ? "尚未载入。原来的 Steam 游戏文件会保留。" : state.Phase == "enabled" ? "已载入" + GameChannel.Get(state.ChannelId).Name : "上次操作尚未完成，请点击“撤回载入国服”还原。";
-            status.Text = current.Error ?? (a == null || !a.Known ? "请确认 Steam 已在线登录，再点“重新检测”。" : !a.Owned ? "请先在 Steam 商店将终末地免费添加入库，再重新检测。" : "载入或撤回时会正常退出并重启 Steam；请先关闭游戏和鹰角启动器。\nSteam 需要以管理员身份运行，工具重启 Steam 时会使用此权限。");
+            status.Text = current.Error ?? (a == null || !a.Known ? "请确认 Steam 已在线登录，再点“重新检测”。" : !a.Owned ? "请先在 Steam 商店将终末地免费添加入库，再重新检测。" : tp ? "第三方启动器模式：载入后，点击 Steam 库中的终末地即可直接调用所选 exe / bat；跳过鹰角启动器与自动点击。" : "载入或撤回时会正常退出并重启 Steam；请先关闭游戏和鹰角启动器。\nSteam 需要以管理员身份运行，工具重启 Steam 时会使用此权限。");
         }
         private async Task Mutate(bool uninstall)
         {

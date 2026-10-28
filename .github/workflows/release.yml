@@ -1,0 +1,58 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+  create:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+        # Node only needed for optional JS fixture tests in test.ps1.
+
+      - name: Run build & package
+        shell: pwsh
+        run: ./package.ps1
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+      - name: Extract version from source
+        id: version
+        shell: pwsh
+        run: |
+          $src = Get-Content -LiteralPath (Join-Path $PWD 'src\Models.cs') -Raw
+          if ($src -notmatch 'const string Version = "([0-9.]+)"') { throw 'Version missing in Models.cs' }
+          "version=$($Matches[1])" | Out-File -Encoding ascii $env:GITHUB_OUTPUT
+
+      - name: Create GitHub Release (tagged pushes only)
+        if: github.event_name == 'create' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Endfield Steam Bridge ${{ steps.version.outputs.version }}
+          files: |
+            dist/EndfieldSteamBridge-*-win-x64.zip
+            dist/EndfieldSteamBridge-*-source.zip
+            dist/SHA256SUMS.txt
+          body: |
+            ### Endfield Steam Bridge v${{ steps.version.outputs.version }}
+
+            自动构建发布。Windows x64 二进制包与源码包见上方附件，SHA256SUMS.txt 包含校验和。
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

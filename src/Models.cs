@@ -7,12 +7,13 @@ namespace EndfieldSteamBridge
 {
     internal static class App
     {
-        public const string Version = "0.2.3";
+        public const string Version = "0.3.0";
         public const uint AppId = 4732690;
         public static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
         public static readonly string Home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EndfieldSteamBridge");
         public static readonly string StatePath = Path.Combine(Home, "installation.json");
         public static readonly string ConfigPath = Path.Combine(Home, "runtime.json");
+        public static readonly string SettingsPath = Path.Combine(Home, "settings.json");
         public static readonly string RuntimeExe = Path.Combine(Home, "app", "EndfieldSteamBridge.exe");
         public static readonly string LogPath = Path.Combine(Home, "bridge.log");
         public static string TaskName { get { return "EndfieldSteamBridge-" + System.Security.Principal.WindowsIdentity.GetCurrent().User.Value; } }
@@ -33,6 +34,12 @@ namespace EndfieldSteamBridge
         public string SteamRoot { get; set; }
         public string TaskName { get; set; }
         public int DebugPort { get; set; }
+        public bool UseThirdPartyLauncher { get; set; }
+        public string ThirdPartyExe { get; set; }
+    }
+    public sealed class AppSettings
+    {
+        public bool UseThirdPartyLauncher { get; set; }
     }
     public sealed class Installation
     {
@@ -67,6 +74,8 @@ namespace EndfieldSteamBridge
         public Ownership Account;
         public string Launcher;
         public string Game;
+        public string ThirdPartyExe;
+        public bool UseThirdPartyLauncher;
         public string GameStatus;
         public Installation Installation;
         public string Error;
