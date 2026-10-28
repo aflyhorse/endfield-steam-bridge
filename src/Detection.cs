@@ -129,12 +129,12 @@ namespace EndfieldSteamBridge
                     if (ValidGame(candidate)) return candidate;
                 }
             }
+            catch (PathTooLongException) { }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
             catch (ArgumentException) { }
             catch (NotSupportedException) { }
             catch (System.Security.SecurityException) { }
-            catch (PathTooLongException) { }
             return null;
         }
         internal static string ResolveGame(string providedGame, string configGame, bool sameChannel, string launcher)
