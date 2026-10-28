@@ -7,7 +7,7 @@ namespace EndfieldSteamBridge
 {
     internal static class App
     {
-        public const string Version = "0.3.0";
+        public const string Version = "0.3.1";
         public const uint AppId = 4732690;
         public static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
         public static readonly string Home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EndfieldSteamBridge");
