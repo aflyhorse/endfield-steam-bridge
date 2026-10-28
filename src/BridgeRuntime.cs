@@ -122,7 +122,11 @@ internal static class BridgeRuntime
                 while (!GameRunning())
                 {
                     TrackThirdPartyDescendants(ownedLaunchers, Config.ThirdPartyExe);
-                    if (DateTime.UtcNow >= deadline) throw new TimeoutException("15 分钟内未检测到国服游戏。请检查第三方启动器与 bridge.log。");
+                    if (DateTime.UtcNow >= deadline)
+                    {
+                        Log("bridge", "检测超时；Endfield 进程：" + DescribeEndfield());
+                        throw new TimeoutException("15 分钟内未检测到国服游戏。请检查第三方启动器与 bridge.log。");
+                    }
                     Thread.Sleep(500);
                 }
             }
@@ -176,7 +180,11 @@ internal static class BridgeRuntime
                     while (!GameRunning())
                     {
                         TrackLaunchers(originalLaunchers, ownedLaunchers);
-                        if (DateTime.UtcNow >= deadline) throw new TimeoutException("15 分钟内未检测到国服游戏。请查看鹰角启动器与 bridge.log。");
+                        if (DateTime.UtcNow >= deadline)
+                        {
+                            Log("bridge", "检测超时；Endfield 进程：" + DescribeEndfield());
+                            throw new TimeoutException("15 分钟内未检测到国服游戏。请查看鹰角启动器与 bridge.log。");
+                        }
                         Thread.Sleep(500);
                     }
                 }
@@ -606,9 +614,24 @@ internal static class BridgeRuntime
             using (process)
             {
                 if (process.Id == self) continue;
-                if (String.Equals(ImagePath(process.Id), Game, StringComparison.OrdinalIgnoreCase)) return true;
+                string path = ImagePath(process.Id);
+                // Third-party launchers can run the client from their own directory and an
+                // elevated client hides its image path from a non-elevated bridge, so the
+                // process name alone identifies the client in that mode.
+                if (Config.UseThirdPartyLauncher)
+                {
+                    if (path == null || String.Equals(Path.GetFileName(path), "Endfield.exe", StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                else if (String.Equals(path, Game, StringComparison.OrdinalIgnoreCase)) return true;
             }
         return false;
+    }
+    private static string DescribeEndfield()
+    {
+        var items = new List<string>();
+        foreach (var process in Process.GetProcessesByName("Endfield"))
+            using (process) items.Add(process.Id + ":" + (ImagePath(process.Id) ?? "<无权限读取路径>"));
+        return items.Count == 0 ? "无" : String.Join("; ", items.ToArray());
     }
     private static string ImagePath(int processId)
     {
