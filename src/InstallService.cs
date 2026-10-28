@@ -114,7 +114,7 @@ namespace EndfieldSteamBridge
             var account = SteamAccount.ProbeIsolated(scan.SteamRoot);
             if (!account.Known || !account.Owned) throw new InvalidOperationException(account.Error ?? "当前 Steam 账号尚未拥有《明日方舟：终末地》，请先在商店免费添加入库。");
             bool ready;
-            string clientStatus = Detection.ClientStatus(scan.Launcher, scan.Game, scan.ChannelId, out ready);
+            string clientStatus = Detection.ClientStatus(scan.Launcher, scan.Game, scan.ChannelId, scan.UseThirdPartyLauncher, out ready, scan.ThirdPartyExe);
             if (!ready) throw new InvalidOperationException(clientStatus);
             var metadata = KeyValues.ReadAppInfo(Path.Combine(scan.SteamRoot, "appcache", "appinfo.vdf"));
             string manifest = FindManifest(scan.SteamRoot);
@@ -128,7 +128,8 @@ namespace EndfieldSteamBridge
                 Directory.CreateDirectory(Path.GetDirectoryName(App.RuntimeExe));
                 if (!Detection.Same(System.Reflection.Assembly.GetExecutingAssembly().Location, App.RuntimeExe)) File.Copy(System.Reflection.Assembly.GetExecutingAssembly().Location, App.RuntimeExe, true);
                 state = files.Prepare(scan.SteamRoot, manifest, App.RuntimeExe, metadata, account.SteamId, legacy, scan.ChannelId);
-                App.Save(App.ConfigPath, new RuntimeConfig { ChannelId = state.ChannelId, Launcher = Path.GetFullPath(scan.Launcher), Game = Path.GetFullPath(scan.Game), SteamRoot = scan.SteamRoot, TaskName = state.TaskName });
+                App.Save(App.ConfigPath, new RuntimeConfig { ChannelId = state.ChannelId, Launcher = Path.GetFullPath(scan.Launcher), Game = Path.GetFullPath(scan.Game), SteamRoot = scan.SteamRoot, TaskName = state.TaskName,
+                    UseThirdPartyLauncher = scan.UseThirdPartyLauncher, ThirdPartyExe = scan.ThirdPartyExe == null ? null : Path.GetFullPath(scan.ThirdPartyExe) });
                 RegisterTask(state.TaskName); taskCreated = true;
                 files.Commit(state);
             }

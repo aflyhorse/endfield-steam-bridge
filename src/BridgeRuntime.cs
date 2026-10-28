@@ -62,6 +62,7 @@ internal static class BridgeRuntime
     public static int RunAssist()
     {
         Config = App.Load<RuntimeConfig>(App.ConfigPath);
+        if (Config.UseThirdPartyLauncher) return 0;
         return Assist();
     }
     internal static bool AcceptSteamLaunch(string appId, string gameId, bool installedBridge)
@@ -106,56 +107,78 @@ internal static class BridgeRuntime
         try
         {
             bool ready;
-            string clientStatus = Detection.ClientStatus(Launcher, Game, Channel.Id, out ready);
-            if (!ready) throw new InvalidOperationException(clientStatus);
-            Log("bridge", "启动 " + Channel.Name + "；SteamAppId=" + Environment.GetEnvironmentVariable("SteamAppId"));
-            if (GameRunning()) throw new InvalidOperationException("国服已在运行。请正常退出后再从 Steam 启动。");
-            if (!GameRunning())
+            if (Config.UseThirdPartyLauncher)
             {
-                var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-                listener.Start(); Port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
-                if (LauncherRunning()) throw new InvalidOperationException("请先完全退出鹰角启动器（包括托盘），再从 Steam 启动。本工具需要由 Steam 重新打开启动器，才能把叠加层传递给国服。");
-                if (!new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
-                    throw new InvalidOperationException("国服启动器需要管理员权限。请先正常退出 Steam，再以管理员身份打开 Steam 后重试。原生叠加层需要 Steam 与国服保持相同权限。");
-                using (var self = Process.GetCurrentProcess())
-                    request = new Request { Pid = self.Id, StartTicks = self.StartTime.ToUniversalTime().Ticks, Id = Guid.NewGuid().ToString("N"), DebugPort = Port };
-                WriteJson(RequestPath, request);
-                var info = new ProcessStartInfo
-                {
-                    FileName = Launcher, Arguments = "--game=endfield",
-                    WorkingDirectory = Path.GetDirectoryName(Launcher), UseShellExecute = false
-                };
-                info.EnvironmentVariables["QTWEBENGINE_REMOTE_DEBUGGING"] = "127.0.0.1:" + Port;
-                // Restore only the app identifiers after verifying this Steam launch.
-                info.EnvironmentVariables["SteamAppId"] = App.AppId.ToString();
-                info.EnvironmentVariables["SteamGameId"] = App.AppId.ToString();
-                // Keep the environment Steam assigned to this official app entry.
-                using (var launcher = Process.Start(info))
-                {
-                    launchedHere = true;
-                    ownedLaunchers[launcher.Id] = launcher.StartTime.ToUniversalTime().Ticks;
-                    request.LauncherPid = launcher.Id;
-                    request.LauncherStartTicks = ownedLaunchers[launcher.Id];
-                    WriteJson(RequestPath, request);
-                    Log("bridge", "由 Steam 进程链打开" + Channel.Name + "启动器 PID=" + launcher.Id);
-                }
-                using (var task = Process.Start(new ProcessStartInfo
-                {
-                    FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "schtasks.exe"),
-                    Arguments = "/run /tn \"" + TaskName + "\"",
-                    UseShellExecute = false, CreateNoWindow = true
-                }))
-                {
-                    task.WaitForExit();
-                    if (task.ExitCode != 0) throw new InvalidOperationException("无法运行自动启动任务。请重新载入国服。");
-                }
-                Log("bridge", "等待自动启动国服。");
+                if (String.IsNullOrWhiteSpace(Config.ThirdPartyExe) || !File.Exists(Config.ThirdPartyExe))
+                    throw new InvalidOperationException("第三方启动器路径不存在：" + Config.ThirdPartyExe);
+                Log("bridge", "第三方启动器模式；ThirdPartyExe=" + Config.ThirdPartyExe + "；SteamAppId=" + Environment.GetEnvironmentVariable("SteamAppId"));
+                if (GameRunning()) throw new InvalidOperationException("国服已在运行。请正常退出后再从 Steam 启动。");
+                var thirdParty = StartThirdParty(Config.ThirdPartyExe);
+                launchedHere = true;
+                ownedLaunchers[thirdParty.Id] = thirdParty.StartTime.ToUniversalTime().Ticks;
+                Log("bridge", "已启动第三方启动器 PID=" + thirdParty.Id);
+                Log("bridge", "等待第三方启动器唤起国服…");
                 var deadline = DateTime.UtcNow.AddMinutes(15);
                 while (!GameRunning())
                 {
-                    TrackLaunchers(originalLaunchers, ownedLaunchers);
-                    if (DateTime.UtcNow >= deadline) throw new TimeoutException("15 分钟内未检测到国服游戏。请查看鹰角启动器与 bridge.log。");
+                    TrackThirdPartyDescendants(ownedLaunchers, Config.ThirdPartyExe);
+                    if (DateTime.UtcNow >= deadline) throw new TimeoutException("15 分钟内未检测到国服游戏。请检查第三方启动器与 bridge.log。");
                     Thread.Sleep(500);
+                }
+            }
+            else
+            {
+                string clientStatus = Detection.ClientStatus(Launcher, Game, Channel.Id, out ready);
+                if (!ready) throw new InvalidOperationException(clientStatus);
+                Log("bridge", "启动 " + Channel.Name + "；SteamAppId=" + Environment.GetEnvironmentVariable("SteamAppId"));
+                if (GameRunning()) throw new InvalidOperationException("国服已在运行。请正常退出后再从 Steam 启动。");
+                if (!GameRunning())
+                {
+                    var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+                    listener.Start(); Port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
+                    if (LauncherRunning()) throw new InvalidOperationException("请先完全退出鹰角启动器（包括托盘），再从 Steam 启动。本工具需要由 Steam 重新打开启动器，才能把叠加层传递给国服。");
+                    if (!new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
+                        throw new InvalidOperationException("国服启动器需要管理员权限。请先正常退出 Steam，再以管理员身份打开 Steam 后重试。原生叠加层需要 Steam 与国服保持相同权限。");
+                    using (var self = Process.GetCurrentProcess())
+                        request = new Request { Pid = self.Id, StartTicks = self.StartTime.ToUniversalTime().Ticks, Id = Guid.NewGuid().ToString("N"), DebugPort = Port };
+                    WriteJson(RequestPath, request);
+                    var info = new ProcessStartInfo
+                    {
+                        FileName = Launcher, Arguments = "--game=endfield",
+                        WorkingDirectory = Path.GetDirectoryName(Launcher), UseShellExecute = false
+                    };
+                    info.EnvironmentVariables["QTWEBENGINE_REMOTE_DEBUGGING"] = "127.0.0.1:" + Port;
+                    // Restore only the app identifiers after verifying this Steam launch.
+                    info.EnvironmentVariables["SteamAppId"] = App.AppId.ToString();
+                    info.EnvironmentVariables["SteamGameId"] = App.AppId.ToString();
+                    // Keep the environment Steam assigned to this official app entry.
+                    using (var launcher = Process.Start(info))
+                    {
+                        launchedHere = true;
+                        ownedLaunchers[launcher.Id] = launcher.StartTime.ToUniversalTime().Ticks;
+                        request.LauncherPid = launcher.Id;
+                        request.LauncherStartTicks = ownedLaunchers[launcher.Id];
+                        WriteJson(RequestPath, request);
+                        Log("bridge", "由 Steam 进程链打开" + Channel.Name + "启动器 PID=" + launcher.Id);
+                    }
+                    using (var task = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "schtasks.exe"),
+                        Arguments = "/run /tn \"" + TaskName + "\"",
+                        UseShellExecute = false, CreateNoWindow = true
+                    }))
+                    {
+                        task.WaitForExit();
+                        if (task.ExitCode != 0) throw new InvalidOperationException("无法运行自动启动任务。请重新载入国服。");
+                    }
+                    Log("bridge", "等待自动启动国服。");
+                    var deadline = DateTime.UtcNow.AddMinutes(15);
+                    while (!GameRunning())
+                    {
+                        TrackLaunchers(originalLaunchers, ownedLaunchers);
+                        if (DateTime.UtcNow >= deadline) throw new TimeoutException("15 分钟内未检测到国服游戏。请查看鹰角启动器与 bridge.log。");
+                        Thread.Sleep(500);
+                    }
                 }
             }
             Log("bridge", "检测到国服游戏，跟踪游玩时长。");
@@ -165,15 +188,19 @@ internal static class BridgeRuntime
             {
                 if (launchedHere)
                 {
-                    TrackLaunchers(originalLaunchers, ownedLaunchers);
-                    if (DateTime.UtcNow >= nextOverlayCheck)
+                    if (Config.UseThirdPartyLauncher) TrackThirdPartyDescendants(ownedLaunchers, Config.ThirdPartyExe);
+                    else
                     {
-                        // Bilibili's platform/crash reporter can create another UI
-                        // after the game opens. Include this session's descendants.
-                        var overlayTargets = new Dictionary<int, long>(ownedLaunchers);
-                        TrackSession(overlayTargets);
-                        RemoveLauncherOverlay(overlayTargets);
-                        nextOverlayCheck = DateTime.UtcNow.AddSeconds(5);
+                        TrackLaunchers(originalLaunchers, ownedLaunchers);
+                        if (DateTime.UtcNow >= nextOverlayCheck)
+                        {
+                            // Bilibili's platform/crash reporter can create another UI
+                            // after the game opens. Include this session's descendants.
+                            var overlayTargets = new Dictionary<int, long>(ownedLaunchers);
+                            TrackSession(overlayTargets);
+                            RemoveLauncherOverlay(overlayTargets);
+                            nextOverlayCheck = DateTime.UtcNow.AddSeconds(5);
+                        }
                     }
                 }
                 Thread.Sleep(1000);
@@ -191,11 +218,58 @@ internal static class BridgeRuntime
         {
             if (launchedHere && (!gameObserved || !GameRunning()))
             {
-                TrackLaunchers(originalLaunchers, ownedLaunchers);
+                if (Config.UseThirdPartyLauncher) TrackThirdPartyDescendants(ownedLaunchers, Config.ThirdPartyExe);
+                else TrackLaunchers(originalLaunchers, ownedLaunchers);
                 CloseOwnedLaunchers(ownedLaunchers);
             }
 
         }
+    }
+
+    private static Process StartThirdParty(string path)
+    {
+        var ext = Path.GetExtension(path);
+        var info = new ProcessStartInfo { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(path) };
+        if (".bat".Equals(ext, StringComparison.OrdinalIgnoreCase) || ".cmd".Equals(ext, StringComparison.OrdinalIgnoreCase))
+        {
+            info.FileName = "cmd.exe";
+            info.Arguments = "/c " + Arguments.Quote(path);
+        }
+        else
+        {
+            info.FileName = path;
+        }
+        info.EnvironmentVariables["SteamAppId"] = App.AppId.ToString();
+        info.EnvironmentVariables["SteamGameId"] = App.AppId.ToString();
+        return Process.Start(info);
+    }
+
+    private static void TrackThirdPartyDescendants(Dictionary<int, long> owned, string thirdPartyExe)
+    {
+        try
+        {
+            string rootDir = Path.GetDirectoryName(thirdPartyExe);
+            var candidates = new List<int[]>();
+            using (var searcher = new ManagementObjectSearcher("SELECT ProcessId, ParentProcessId FROM Win32_Process"))
+            using (var rows = searcher.Get())
+                foreach (ManagementObject row in rows)
+                    using (row) candidates.Add(new[] { Convert.ToInt32(row["ProcessId"]), Convert.ToInt32(row["ParentProcessId"]) });
+            bool added;
+            do
+            {
+                added = false;
+                foreach (var candidate in candidates)
+                {
+                    int pid = candidate[0], parent = candidate[1];
+                    if (owned.ContainsKey(pid) || !owned.ContainsKey(parent)) continue;
+                    long started = CreationTicks(pid);
+                    string path = ImagePath(pid);
+                    if (path != null && rootDir != null && path.StartsWith(rootDir + "\\", StringComparison.OrdinalIgnoreCase)) { owned[pid] = started; added = true; }
+                    else if (String.Equals(path, Game, StringComparison.OrdinalIgnoreCase)) { owned[pid] = started; added = true; }
+                }
+            } while (added);
+        }
+        catch (ManagementException error) { Log("watch", "第三方启动进程树跟踪失败：" + error.Message); }
     }
 
     private static int Assist()
@@ -469,7 +543,7 @@ internal static class BridgeRuntime
                 {
                     if (process.HasExited || CreationTicks(process.Id) != pair.Value) continue;
                     string path = ImagePath(process.Id);
-                    if (!SessionPath(path)) continue;
+                    if (!Config.UseThirdPartyLauncher && !SessionPath(path)) continue;
                     string name = process.ProcessName;
                     process.Kill();
                     process.WaitForExit(3000);

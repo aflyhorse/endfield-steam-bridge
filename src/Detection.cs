@@ -94,7 +94,20 @@ namespace EndfieldSteamBridge
         }
         public static string ClientStatus(string launcher, string game, string channelId, out bool ready)
         {
+            return ClientStatus(launcher, game, channelId, false, out ready, null);
+        }
+        public static string ClientStatus(string launcher, string game, string channelId, bool thirdParty, out bool ready, string thirdPartyExe)
+        {
             var channel = GameChannel.Get(channelId); ready = false;
+            if (thirdParty)
+            {
+                if (String.IsNullOrWhiteSpace(thirdPartyExe) || !File.Exists(thirdPartyExe))
+                    return "第三方启动器路径无效，请选择可执行文件 (.exe / .bat)";
+                string ext = Path.GetExtension(thirdPartyExe);
+                if (!".exe".Equals(ext, StringComparison.OrdinalIgnoreCase) && !".bat".Equals(ext, StringComparison.OrdinalIgnoreCase))
+                    return "第三方启动器仅支持 .exe 或 .bat 文件";
+                ready = true; return "第三方启动器已就绪";
+            }
             if (!ValidLauncher(launcher)) return "未找到" + channel.Name + "启动器，请手动选择 Launcher.exe";
             string launcherChannel = GameChannel.IdentifyLauncher(launcher);
             if (launcherChannel != channel.Id) return launcherChannel == null ? "无法识别启动器渠道，请选择已安装的" + channel.Name + "启动器" : "启动器属于" + GameChannel.Get(launcherChannel).Name + "，与所选服务器不一致";
@@ -116,12 +129,12 @@ namespace EndfieldSteamBridge
                     if (ValidGame(candidate)) return candidate;
                 }
             }
+            catch (PathTooLongException) { }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
             catch (ArgumentException) { }
             catch (NotSupportedException) { }
             catch (System.Security.SecurityException) { }
-            catch (PathTooLongException) { }
             return null;
         }
         internal static string ResolveGame(string providedGame, string configGame, bool sameChannel, string launcher)
@@ -129,7 +142,7 @@ namespace EndfieldSteamBridge
             string game = providedGame ?? (sameChannel && ValidGame(configGame) ? configGame : null);
             return game ?? DetectGameFromLauncher(launcher);
         }
-        public static DetectionResult Scan(string launcher, string game, string channelId = null)
+        public static DetectionResult Scan(string launcher, string game, string channelId = null, bool useThirdPartyLauncher = false, string thirdPartyExe = null)
         {
             var result = new DetectionResult();
             try
@@ -141,7 +154,11 @@ namespace EndfieldSteamBridge
                 bool sameChannel = config != null && GameChannel.Get(config.ChannelId).Id == channel.Id;
                 result.Launcher = launcher ?? (sameChannel && ValidLauncher(config.Launcher) ? config.Launcher : FindLauncher(channel.Id));
                 result.Game = ResolveGame(game, config == null ? null : config.Game, sameChannel, result.Launcher);
-                result.GameStatus = ClientStatus(result.Launcher, result.Game, channel.Id, out result.ClientReady);
+                bool thirdParty = useThirdPartyLauncher || (config != null && config.UseThirdPartyLauncher);
+                string tpex = thirdPartyExe ?? (config == null ? null : config.ThirdPartyExe);
+                result.UseThirdPartyLauncher = thirdParty;
+                result.ThirdPartyExe = tpex;
+                result.GameStatus = ClientStatus(result.Launcher, result.Game, channel.Id, thirdParty, out result.ClientReady, tpex);
             }
             catch (Exception e) { result.Error = e.Message; }
             return result;
