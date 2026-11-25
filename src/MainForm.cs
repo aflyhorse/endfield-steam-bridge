@@ -180,7 +180,7 @@ namespace EndfieldSteamBridge
             ApplyThirdPartyUI();
             var a = current.Account;
             var channel = (GameChannel)server.SelectedItem;
-            bool tp = thirdParty.Checked || (current != null && current.UseThirdPartyLauncher);
+            bool tp = thirdParty.Checked;
             headline.Text = channel == GameChannel.Official ? (tp ? "官服终末地 · 第三方启动器模式" : "官服终末地接入Steam启动") : (tp ? "B服终末地 · 第三方启动器模式" : "B服终末地接入Steam启动");
             account.Text = a == null || !a.Known ? (a == null ? "Steam 未就绪" : a.Error) : (a.Owned ? "已拥有终末地  ·  " : "尚未拥有终末地  ·  ") + (a.Name ?? a.SteamId.ToString());
             account.ForeColor = a != null && a.Known && a.Owned ? blue : Color.FromArgb(162, 85, 30);
