@@ -86,7 +86,7 @@ namespace EndfieldSteamBridge
             var project = new LinkLabel { Text = "项目已开源！喜欢的话请给该项目点个⭐", AutoSize = true, BackColor = Color.Transparent, LinkColor = blue, LinkBehavior = LinkBehavior.HoverUnderline, Cursor = Cursors.Hand, Margin = new Padding(0) };
             project.LinkClicked += delegate { Process.Start(new ProcessStartInfo("https://github.com/SoledadAki/endfield-steam-bridge") { UseShellExecute = true }); };
             footer.Controls.Add(library); footer.Controls.Add(logs); footer.Controls.Add(project); layout.Controls.Add(footer, 0, 6);
-            Shown += async delegate { if (!previewRendering) await RefreshDetection(); };
+            Shown += async delegate { if (!previewRendering) { InstallService.RepairManifest(); await RefreshDetection(); } };
             FormClosing += delegate(object s, FormClosingEventArgs e) { if (busy) { e.Cancel = true; status.Text = "正在处理，请等待当前操作完成。"; } };
             SetBusy(true);
         }
@@ -161,7 +161,8 @@ namespace EndfieldSteamBridge
             refresh.Enabled = chooseLauncher.Enabled = chooseGame.Enabled = server.Enabled = thirdParty.Enabled = !value;
             if (thirdParty.Checked) chooseLauncher.Enabled = false;
             bool stateExists = File.Exists(App.StatePath);
-            enable.Enabled = !value && !stateExists && current != null && current.Account != null && current.Account.Known && current.Account.Owned && current.ClientReady;
+            enable.Enabled = !value && current != null && current.Account != null && current.Account.Known && current.Account.Owned && current.ClientReady;
+            enable.Text = stateExists ? "重新载入国服" : "一键载入国服";
             restore.Enabled = !value && stateExists;
         }
         private async Task RefreshDetection()
@@ -188,17 +189,35 @@ namespace EndfieldSteamBridge
             client.Text = current.GameStatus ?? "等待 Steam 检测完成";
             var state = current.Installation;
             installed.Text = state == null ? "尚未载入。原来的 Steam 游戏文件会保留。" : state.Phase == "enabled" ? "已载入" + GameChannel.Get(state.ChannelId).Name : "上次操作尚未完成，请点击“撤回载入国服”还原。";
+            enable.Text = state == null ? "一键载入国服" : "重新载入国服";
             status.Text = current.Error ?? (a == null || !a.Known ? "请确认 Steam 已在线登录，再点“重新检测”。" : !a.Owned ? "请先在 Steam 商店将终末地免费添加入库，再重新检测。" : tp ? "第三方启动器模式：载入后，点击 Steam 库中的终末地即可直接调用所选 exe / bat；跳过鹰角启动器与自动点击。" : "载入或撤回时会正常退出并重启 Steam；请先关闭游戏和鹰角启动器。\nSteam 需要以管理员身份运行，工具重启 Steam 时会使用此权限。");
+        }
+        private bool ConfirmClearBridge()
+        {
+            string stale = InstallService.StaleBridgeDirectory(current);
+            if (stale == null) return true;
+            if (MessageBox.Show(this, "桥接目录非空：\n" + stale + "\n\n是否清空该目录？", "清理桥接目录", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+            { status.Text = "已取消，未做任何更改。"; return false; }
+            try { InstallService.ClearBridgeDirectory(stale); return true; }
+            catch (Exception e)
+            {
+                MessageBox.Show(this, e.Message, "无法清空目录", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                status.Text = e.Message; return false;
+            }
         }
         private async Task Mutate(bool uninstall)
         {
+            bool reload = !uninstall && File.Exists(App.StatePath);
+            if (!uninstall && !reload && current != null && !ConfirmClearBridge()) return;
             SetBusy(true);
             Action<string> report = message => { if (!IsDisposed) BeginInvoke((Action)(() => status.Text = message)); };
             string outcome = null;
             try
             {
-                if (uninstall) await Task.Run(() => InstallService.Restore(report)); else await Task.Run(() => InstallService.Enable(current, report));
-                outcome = uninstall ? "已撤回国服载入并恢复 Steam。等待客户端启动后，可检查游戏库按钮。" : "载入完成。等待 Steam 启动完成后，点击终末地的“开始游戏”。";
+                if (uninstall) await Task.Run(() => InstallService.Restore(report));
+                else if (reload) await Task.Run(() => InstallService.Reload(current, report));
+                else await Task.Run(() => InstallService.Enable(current, report));
+                outcome = uninstall ? "已撤回国服载入并恢复 Steam。等待客户端启动后，可检查游戏库按钮。" : reload ? "已重新载入。等待 Steam 启动完成后，点击终末地的“开始游戏”。" : "载入完成。等待 Steam 启动完成后，点击终末地的“开始游戏”。";
             }
             catch (Exception e) { outcome = e.Message; MessageBox.Show(this, e.Message, "操作未完成", MessageBoxButtons.OK, MessageBoxIcon.Information); }
             finally

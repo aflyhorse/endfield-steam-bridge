@@ -41,7 +41,7 @@ namespace EndfieldSteamBridge
                 var appState = new Dictionary<string, object> {
                     { "appid", App.AppId.ToString() }, { "Universe", "1" }, { "name", "Arknights: Endfield" }, { "StateFlags", "4" },
                     { "installdir", Path.GetFileName(directory) }, { "LastUpdated", ((long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds).ToString() },
-                    { "SizeOnDisk", new FileInfo(exe).Length.ToString() }, { "buildid", metadata.Build }, { "LastOwner", owner.ToString() },
+                    { "SizeOnDisk", new FileInfo(exe).Length.ToString() }, { "buildid", App.BuildPin }, { "LastOwner", owner.ToString() },
                     { "UpdateResult", "0" }, { "BytesToDownload", "0" }, { "BytesDownloaded", "0" }, { "BytesToStage", "0" }, { "BytesStaged", "0" },
                     { "AutoUpdateBehavior", "1" }, { "AllowOtherDownloadsWhileRunning", "0" }, { "ScheduledAutoUpdate", "0" },
                     { "InstalledDepots", depots }, { "UserConfig", new Dictionary<string, object> { { "language", "schinese" } } },
@@ -82,6 +82,20 @@ namespace EndfieldSteamBridge
             // Keep the state until Task Scheduler cleanup succeeds, so retry is possible.
         }
         public void FinishRestore() { if (File.Exists(StatePath)) File.Delete(StatePath); }
+        // Steam reads buildid from the manifest; keeping it above the latest real
+        // build makes the client treat the app as up to date. Re-apply it when the
+        // client (or another tool) rewrote the manifest.
+        public void Reassert(Installation state)
+        {
+            if (state == null || state.Phase != "enabled" || !File.Exists(state.ManagedManifestBackup)) return;
+            ValidateState(state);
+            string managed = File.ReadAllText(state.ManagedManifestBackup);
+            string pinned = PinBuild(managed);
+            if (pinned != managed) { managed = pinned; File.WriteAllText(state.ManagedManifestBackup, managed, new UTF8Encoding(false)); }
+            if (!File.Exists(state.ManifestPath) || File.ReadAllText(state.ManifestPath) != managed) AtomicCopy(state.ManagedManifestBackup, state.ManifestPath);
+        }
+        private static string PinBuild(string text)
+        { return System.Text.RegularExpressions.Regex.Replace(text, "(\"buildid\"\\s*\")[^\"]*(\")", "${1}" + App.BuildPin + "${2}"); }
         private static void AtomicCopy(string source, string target)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(target));
@@ -110,6 +124,29 @@ namespace EndfieldSteamBridge
     {
         public static void Enable(DetectionResult scan, Action<string> progress)
         {
+            Apply(scan, progress, null);
+            progress("已载入国服。请等待 Steam 启动完成，再从游戏库开始游戏。");
+        }
+        // Withdraw and re-apply in a single Steam restart cycle.
+        public static void Reload(DetectionResult scan, Action<string> progress)
+        {
+            var existing = File.Exists(App.StatePath) ? App.Load<Installation>(App.StatePath) : null;
+            if (existing == null || existing.Phase != "enabled") { Enable(scan, progress); return; }
+            Apply(scan, progress, existing);
+            progress("已重新载入。请等待 Steam 启动完成，再从游戏库开始游戏。");
+        }
+        // Best effort: restore the pinned build id if Steam rewrote the manifest.
+        public static void RepairManifest()
+        {
+            try
+            {
+                if (!File.Exists(App.StatePath)) return;
+                new InstallFiles(App.Home).Reassert(App.Load<Installation>(App.StatePath));
+            }
+            catch { }
+        }
+        private static void Apply(DetectionResult scan, Action<string> progress, Installation existing)
+        {
             // Recheck ownership immediately before changing Steam, including account switches.
             var account = SteamAccount.ProbeIsolated(scan.SteamRoot);
             if (!account.Known || !account.Owned) throw new InvalidOperationException(account.Error ?? "当前 Steam 账号尚未拥有《明日方舟：终末地》，请先在商店免费添加入库。");
@@ -124,7 +161,8 @@ namespace EndfieldSteamBridge
             var files = new InstallFiles(App.Home); Installation state = null; bool taskCreated = false;
             try
             {
-                progress("备份原始状态并安装桥接…");
+                if (existing != null) { progress("正在撤回上次载入…"); files.Restore(existing); files.FinishRestore(); }
+                progress(existing != null ? "正在应用新的载入…" : "备份原始状态并安装桥接…");
                 Directory.CreateDirectory(Path.GetDirectoryName(App.RuntimeExe));
                 if (!Detection.Same(System.Reflection.Assembly.GetExecutingAssembly().Location, App.RuntimeExe)) File.Copy(System.Reflection.Assembly.GetExecutingAssembly().Location, App.RuntimeExe, true);
                 state = files.Prepare(scan.SteamRoot, manifest, App.RuntimeExe, metadata, account.SteamId, legacy, scan.ChannelId);
@@ -140,7 +178,6 @@ namespace EndfieldSteamBridge
                 throw;
             }
             finally { StartSteam(scan.SteamRoot); }
-            progress("已载入国服。请等待 Steam 启动完成，再从游戏库开始游戏。");
         }
         public static void Restore(Action<string> progress)
         {
@@ -162,6 +199,26 @@ namespace EndfieldSteamBridge
             var matches = Detection.Libraries(steam).Select(p => Path.Combine(p, "steamapps", "appmanifest_4732690.acf")).Where(File.Exists).ToArray();
             if (matches.Length > 1) throw new IOException("多个 Steam 库中都有终末地安装记录，请先在 Steam 中处理重复安装。");
             return matches.Length == 1 ? matches[0] : Path.Combine(steam, "steamapps", "appmanifest_4732690.acf");
+        }
+        // Leftover bridge directory that would block a fresh install.
+        public static string StaleBridgeDirectory(DetectionResult scan)
+        {
+            if (scan == null || String.IsNullOrEmpty(scan.SteamRoot)) return null;
+            try
+            {
+                string directory = Path.Combine(Path.GetDirectoryName(FindManifest(scan.SteamRoot)), "common", "Endfield Steam CN Bridge");
+                return Directory.Exists(directory) ? directory : null;
+            }
+            catch { return null; }
+        }
+        public static void ClearBridgeDirectory(string directory)
+        {
+            string path = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar);
+            if (!String.Equals(Path.GetFileName(path), "Endfield Steam CN Bridge", StringComparison.OrdinalIgnoreCase)
+                || !String.Equals(Path.GetFileName(Path.GetDirectoryName(path)), "common", StringComparison.OrdinalIgnoreCase)
+                || !String.Equals(Path.GetFileName(Path.GetDirectoryName(Path.GetDirectoryName(path))), "steamapps", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("目录路径不正确，已停止清空：" + directory);
+            if (Directory.Exists(path)) Directory.Delete(path, true);
         }
         public static bool IsLegacy(string manifest)
         {
