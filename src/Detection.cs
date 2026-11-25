@@ -142,7 +142,7 @@ namespace EndfieldSteamBridge
             string game = providedGame ?? (sameChannel && ValidGame(configGame) ? configGame : null);
             return game ?? DetectGameFromLauncher(launcher);
         }
-        public static DetectionResult Scan(string launcher, string game, string channelId = null, bool useThirdPartyLauncher = false, string thirdPartyExe = null)
+        public static DetectionResult Scan(string launcher, string game, string channelId = null, bool? useThirdPartyLauncher = null, string thirdPartyExe = null)
         {
             var result = new DetectionResult();
             try
@@ -154,8 +154,8 @@ namespace EndfieldSteamBridge
                 bool sameChannel = config != null && GameChannel.Get(config.ChannelId).Id == channel.Id;
                 result.Launcher = launcher ?? (sameChannel && ValidLauncher(config.Launcher) ? config.Launcher : FindLauncher(channel.Id));
                 result.Game = ResolveGame(game, config == null ? null : config.Game, sameChannel, result.Launcher);
-                bool thirdParty = useThirdPartyLauncher || (config != null && config.UseThirdPartyLauncher);
-                string tpex = thirdPartyExe ?? (config == null ? null : config.ThirdPartyExe);
+                bool thirdParty = useThirdPartyLauncher ?? (config != null && config.UseThirdPartyLauncher);
+                string tpex = thirdParty ? (thirdPartyExe ?? (config == null ? null : config.ThirdPartyExe)) : null;
                 result.UseThirdPartyLauncher = thirdParty;
                 result.ThirdPartyExe = tpex;
                 result.GameStatus = ClientStatus(result.Launcher, result.Game, channel.Id, thirdParty, out result.ClientReady, tpex);
