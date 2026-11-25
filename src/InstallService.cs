@@ -161,7 +161,29 @@ namespace EndfieldSteamBridge
             var files = new InstallFiles(App.Home); Installation state = null; bool taskCreated = false;
             try
             {
-                if (existing != null) { progress("正在撤回上次载入…"); files.Restore(existing); files.FinishRestore(); }
+                if (existing != null) {
+                    progress("正在撤回上次载入…");
+                    try { files.Restore(existing); files.FinishRestore(); }
+                    catch (Exception restoreEx) {
+                        // Restore.RemoveBridge may fail when the .endfield-steam-bridge marker
+                        // was deleted / token is stale. existing.BridgeDirectory passed
+                        // ValidateState upstream, and ClearBridgeDirectory re-checks the
+                        // path shape before deleting, so a safe fallback cleanup is fine.
+                        if (Directory.Exists(existing.BridgeDirectory) &&
+                            (restoreEx is IOException || restoreEx is InvalidDataException)) {
+                            progress("桥接目录标记已失效，正在清理残留目录…");
+                            ClearBridgeDirectory(existing.BridgeDirectory);
+                            if (File.Exists(App.StatePath)) File.Delete(App.StatePath);
+                        }
+                        else throw;
+                    }
+                    // Guard against edge cases where RemoveBridge only deleted the marker/exe
+                    // but left the directory itself.
+                    if (Directory.Exists(existing.BridgeDirectory)) {
+                        progress("清理残留桥接目录…");
+                        ClearBridgeDirectory(existing.BridgeDirectory);
+                    }
+                }
                 progress(existing != null ? "正在应用新的载入…" : "备份原始状态并安装桥接…");
                 Directory.CreateDirectory(Path.GetDirectoryName(App.RuntimeExe));
                 if (!Detection.Same(System.Reflection.Assembly.GetExecutingAssembly().Location, App.RuntimeExe)) File.Copy(System.Reflection.Assembly.GetExecutingAssembly().Location, App.RuntimeExe, true);
@@ -187,7 +209,16 @@ namespace EndfieldSteamBridge
             try
             {
                 var files = new InstallFiles(App.Home);
-                progress("正在还原 Steam 安装状态…"); files.Restore(state);
+                progress("正在还原 Steam 安装状态…");
+                try { files.Restore(state); }
+                catch (Exception restoreEx) {
+                    if (Directory.Exists(state.BridgeDirectory) &&
+                        (restoreEx is IOException || restoreEx is InvalidDataException)) {
+                        progress("桥接目录标记已失效，正在清理残留目录…");
+                        ClearBridgeDirectory(state.BridgeDirectory);
+                    }
+                    else throw;
+                }
                 DeleteTask(state.TaskName); files.FinishRestore();
                 if (File.Exists(App.ConfigPath)) File.Delete(App.ConfigPath);
             }
